@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 from PySide6.QtCore import Qt, QUrl, QSizeF, QRectF, QThread, Signal, QSettings
-from PySide6.QtGui import QFont, QPen, QBrush, QColor, QPainter, QAction, QImage, QPixmap, QPalette
+from PySide6.QtGui import QFont, QPen, QBrush, QColor, QPainter, QAction, QImage, QPixmap, QPalette, QIcon
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
@@ -38,6 +38,23 @@ try:
     FFMPEG = imageio_ffmpeg.get_ffmpeg_exe()
 except Exception:
     FFMPEG = "ffmpeg"
+
+
+def make_sign_icon(color, plus, size=16):
+    """Render a crisp +/− glyph in the theme's button color (no icon-font dep)."""
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(color, 2)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    m, pad = size // 2, 3
+    p.drawLine(pad, m, size - pad, m)
+    if plus:
+        p.drawLine(m, pad, m, size - pad)
+    p.end()
+    return QIcon(pm)
 
 
 # ---------- wrapping (same logic as wrap_srt.py) ----------
@@ -313,9 +330,12 @@ class TimelinePanel(QWidget):
         self.scroll.setFixedHeight(TimelineContent.H + 18)
         self._fit_mode = True
 
-        b_out = QPushButton("Zoom −"); b_out.clicked.connect(lambda: self._zoom(0.8))
-        b_in = QPushButton("Zoom +"); b_in.clicked.connect(lambda: self._zoom(1.25))
-        b_fit = QPushButton("Fit"); b_fit.clicked.connect(self.fit)
+        sign = self.palette().color(QPalette.ButtonText)
+        b_out = QPushButton(); b_out.setIcon(make_sign_icon(sign, plus=False))
+        b_out.setToolTip("Zoom out"); b_out.setFixedWidth(40); b_out.clicked.connect(lambda: self._zoom(0.8))
+        b_in = QPushButton(); b_in.setIcon(make_sign_icon(sign, plus=True))
+        b_in.setToolTip("Zoom in"); b_in.setFixedWidth(40); b_in.clicked.connect(lambda: self._zoom(1.25))
+        b_fit = QPushButton("Fit"); b_fit.setToolTip("Fit timeline to view"); b_fit.clicked.connect(self.fit)
         bar = QHBoxLayout()
         bar.addWidget(QLabel("Timeline  (scroll wheel to zoom)")); bar.addStretch(1)
         bar.addWidget(b_out); bar.addWidget(b_in); bar.addWidget(b_fit)
@@ -599,6 +619,7 @@ class Studio(QMainWindow):
     def _build_menu(self):
         mb = self.menuBar()
         m_file = mb.addMenu("&File")
+        m_file.addAction(_act(self, "&New SRT", self.new_srt, "Ctrl+N"))
         m_file.addAction(_act(self, "Open &Video…", self.open_video, "Ctrl+O"))
         self.m_recent = m_file.addMenu("Open &Recent")
         self._rebuild_recent_menu()
@@ -608,6 +629,11 @@ class Studio(QMainWindow):
         m_file.addAction(_act(self, "&Quit", self.close, "Ctrl+Q"))
 
         m_cap = mb.addMenu("&Caption")
+        self.act_add = _act(self, "&Add caption", self.add_cue, "Ins")
+        self.act_del = _act(self, "&Delete caption", self.delete_cue, "Ctrl+Del")
+        m_cap.addAction(self.act_add)
+        m_cap.addAction(self.act_del)
+        m_cap.addSeparator()
         m_cap.addAction(_act(self, "&Style…", self.show_style))
         self.act_wrap = QAction("&Wrap on save", self, checkable=True)
         self.act_wrap.setChecked(self.wrap_default)
@@ -667,6 +693,11 @@ class Studio(QMainWindow):
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.itemSelectionChanged.connect(self._on_select)
+        # scope Add/Delete keyboard shortcuts to the table so they don't steal
+        # Ins / Ctrl+Del from the caption text editor (menu + buttons still work).
+        for a in (self.act_add, self.act_del):
+            a.setShortcutContext(Qt.WidgetWithChildrenShortcut)
+            self.table.addAction(a)
 
         self.ed_start = QLineEdit(); self.ed_start.editingFinished.connect(self._apply_timing)
         self.ed_end = QLineEdit(); self.ed_end.editingFinished.connect(self._apply_timing)
@@ -678,8 +709,20 @@ class Studio(QMainWindow):
         editor = QVBoxLayout(); editor.addLayout(form); editor.addWidget(QLabel("Text")); editor.addWidget(self.ed_text)
         ed_box = QGroupBox("Edit caption"); ed_box.setLayout(editor)
 
+        sign = self.palette().color(QPalette.ButtonText)
+        add_btn = QPushButton(); add_btn.setIcon(make_sign_icon(sign, plus=True))
+        add_btn.setToolTip("Add a caption at the playhead (Ins)"); add_btn.setFixedWidth(40)
+        add_btn.clicked.connect(self.add_cue)
+        del_btn = QPushButton(); del_btn.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+        del_btn.setToolTip("Delete the selected caption (Ctrl+Del)"); del_btn.setFixedWidth(40)
+        del_btn.clicked.connect(self.delete_cue)
+        tbl_btns = QHBoxLayout(); tbl_btns.setContentsMargins(0, 0, 0, 0)
+        tbl_btns.addWidget(add_btn); tbl_btns.addWidget(del_btn); tbl_btns.addStretch(1)
+        tbl_box = QWidget(); tbl_lay = QVBoxLayout(tbl_box); tbl_lay.setContentsMargins(0, 0, 0, 0)
+        tbl_lay.addWidget(self.table); tbl_lay.addLayout(tbl_btns)
+
         left_split = QSplitter(Qt.Vertical)
-        left_split.addWidget(self.table)
+        left_split.addWidget(tbl_box)
         left_split.addWidget(ed_box)
         left_split.setSizes([580, 200])
 
@@ -768,6 +811,18 @@ class Studio(QMainWindow):
         return True                      # Discard
 
     # ---------- files ----------
+    def new_srt(self):
+        if not self._confirm_discard():
+            return
+        self.cues = []
+        self.srt_path = None
+        self._title_name = "untitled.srt"
+        self._dirty = False
+        self._update_title()
+        self._fill_table()
+        self._clear_editor()
+        self.timeline.set_cues(self.cues)
+
     def open_video(self, path=None):
         if not self._confirm_discard():
             return
@@ -829,6 +884,8 @@ class Studio(QMainWindow):
 
     def save_srt(self):
         if not self.cues:
+            QMessageBox.information(self, "Nothing to save",
+                                    "There are no captions yet. Add one with Caption → Add (Ins).")
             return
         # getSaveFileName is a Save-As; the native dialog prompts before overwriting.
         path, _ = QFileDialog.getSaveFileName(self, "Save SRT as…", self._default_save_name(), "Subtitles (*.srt)")
@@ -912,6 +969,49 @@ class Studio(QMainWindow):
         self._sync = False
         self.timeline.set_cues(self.cues)
         self._set_dirty(True)
+
+    def add_cue(self):
+        start = int(self.player.position())
+        dur = int(self.player.duration())
+        end = start + 2000
+        if dur > 0:
+            end = min(end, dur)
+            if end - start < 200:            # at the very end: back the cue up a bit
+                start, end = max(0, dur - 2000), dur
+        cue = {"start": start, "end": max(end, start + 200), "text": ""}
+        self.cues.append(cue)
+        self.cues.sort(key=lambda c: c["start"])
+        self._fill_table()
+        self.timeline.set_cues(self.cues)
+        idx = next(i for i, c in enumerate(self.cues) if c is cue)
+        self._select_row(idx)
+        self.ed_text.setFocus()
+        self._set_dirty(True)
+
+    def delete_cue(self):
+        r = self._cur_row()
+        if r < 0:
+            return
+        del self.cues[r]
+        self._fill_table()
+        self.timeline.set_cues(self.cues)
+        if self.cues:
+            self._select_row(min(r, len(self.cues) - 1))
+        else:
+            self._clear_editor()
+        self._set_dirty(True)
+
+    def _select_row(self, idx):
+        if 0 <= idx < self.table.rowCount():
+            self.table.selectRow(idx)   # fires _on_select -> fills editor, seeks
+
+    def _clear_editor(self):
+        self._sync = True
+        self.ed_start.clear()
+        self.ed_end.clear()
+        self.ed_text.clear()
+        self._sync = False
+        self.view.set_caption("")
 
     # ---------- playback ----------
     def _toggle_play(self):

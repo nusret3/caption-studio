@@ -12,6 +12,7 @@ A small desktop app for previewing and fine-tuning **`.srt` subtitles over portr
 - **Burn-in caption preview over the actual video**, drawn in the video's own pixel space so line widths match the final frame.
 - **Aspect-locked portrait video box** — handles phone videos stored landscape with a rotation flag (probed via ffmpeg).
 - **Live line-wrap by character budget** — balanced, never splits a word. Manual line breaks you type in the editor are honored verbatim.
+- **Full caption editing** — start a **new SRT from scratch**, **add** a caption at the playhead, **delete** the selected one, and edit text/timing inline.
 - **Playback transport** — play/pause, seek, and a **volume / mute** control (level is remembered).
 - **Caption table + text/timing editor** — the active row highlights and follows playback.
 - **Bottom timeline** — filmstrip thumbnails, high-resolution audio waveform, caption blocks, and a playhead. Scroll-wheel zoom centered on the playhead, plus Zoom −/＋/Fit.
@@ -66,16 +67,17 @@ Or directly, if your environment already has the dependencies:
 python caption_studio.py [video]
 ```
 
-The optional `[video]` argument opens that file on launch; otherwise the app reopens your last video.
+The optional `[video]` argument opens that file on launch. Recently opened videos are available under **File → Open Recent**.
 
 ## Usage
 
-1. **Open a video** (File → Open, or pass it on the command line). Caption Studio auto-loads a sibling `.srt` next to it.
-2. **Tune the Line width** to set the character budget per line — the preview re-wraps live.
-3. **Caption → Style…** to pick the font, size, Bold/Italic, and text color.
-4. Type **manual line breaks** in the editor where you want them — they're honored verbatim.
-5. **Scroll** over the timeline to zoom (centered on the playhead); use Zoom −/＋/Fit to reframe.
-6. **Save As** writes the `.srt` wrapped at the current width (or flat), with a default name that won't overwrite the source.
+1. **Open a video** (File → Open, or pass it on the command line). Caption Studio auto-loads a sibling `.srt` next to it — or start a blank one with **File → New SRT**.
+2. **Add / delete captions** — **Caption → Add** (or the ＋ button / `Ins`) drops a caption at the playhead; **Caption → Delete** (or the － button / `Ctrl+Del`) removes the selected one. Edit text and timing in the editor below the table.
+3. **Tune the Line width** to set the character budget per line — the preview re-wraps live.
+4. **Caption → Style…** to pick the font, size, Bold/Italic, and text color.
+5. Type **manual line breaks** in the editor where you want them — they're honored verbatim.
+6. **Scroll** over the timeline to zoom (centered on the playhead); use Zoom −/＋/Fit to reframe.
+7. **Save As** writes the `.srt` wrapped at the current width (or flat), with a default name that won't overwrite the source. You'll be prompted to save unsaved edits before quitting or switching files.
 
 ### How wrapping works
 
