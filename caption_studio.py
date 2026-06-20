@@ -865,10 +865,9 @@ class Studio(QMainWindow):
         self._thumb.ready.connect(self._on_thumbs)
         self._thumb.start()
         stem = Path(path).with_suffix("")
-        for cand in (Path(str(stem) + ".short.srt"), Path(str(stem) + ".srt")):
-            if cand.exists():
-                self._load_srt(cand)
-                break
+        cand = Path(str(stem) + ".srt")
+        if cand.exists():
+            self._load_srt(cand)
 
     def _on_thumbs(self, thumbs):
         self.timeline.set_thumbs([(ms, QPixmap.fromImage(img)) for ms, img in thumbs])
@@ -892,11 +891,9 @@ class Studio(QMainWindow):
 
     def _default_save_name(self):
         if self.srt_path:
-            p = Path(self.srt_path)
-            # when wrapping, default to a *.wrapped.srt so we don't clobber the source
-            if self.act_wrap.isChecked():
-                return str(p.with_name(p.stem + ".wrapped" + p.suffix))
-            return str(p)
+            # default to the same file; the native Save dialog already asks
+            # before overwriting, so leave that decision to the user
+            return str(self.srt_path)
         base = Path(self.last_dir) if self.last_dir else Path.cwd()
         return str(base / "captions.srt")
 
