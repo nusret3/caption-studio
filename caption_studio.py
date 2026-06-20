@@ -98,6 +98,15 @@ def render_caption(text, max_chars):
     return text if "\n" in text else wrap_text(text, max_chars)
 
 
+# visible marker for a manual line break in the single-line table cell
+BREAK_GLYPH = " ↵ "
+
+
+def row_text(text):
+    """One-line representation of a caption for the table, with breaks shown."""
+    return text.replace("\n", BREAK_GLYPH)
+
+
 # ---------- srt parse / write ----------
 def ms_to_ts(ms):
     ms = max(0, int(ms))
@@ -123,7 +132,8 @@ def parse_srt(path):
         if ai is None:
             continue
         start, end = [p.strip().split()[0] for p in lines[ai].split("-->")]
-        text = " ".join(l for l in lines[ai + 1:] if l.strip())
+        # keep the caption's own line breaks (manual wrapping) instead of flattening
+        text = "\n".join(l.strip() for l in lines[ai + 1:] if l.strip())
         cues.append({"start": ts_to_ms(start), "end": ts_to_ms(end), "text": text})
     cues.sort(key=lambda c: c["start"])
     return cues
@@ -248,6 +258,7 @@ class TimelineContent(QWidget):
         self.duration = 0
         self.position = 0
         self.cues = []
+        self.active = -1     # index of the caption under the playhead / selected
         self.thumbs = []     # [(ms, QPixmap)]
         self.pps = 50.0      # pixels per second
 
@@ -258,6 +269,7 @@ class TimelineContent(QWidget):
     def set_cues(self, c): self.cues = c; self.update()
     def set_thumbs(self, t): self.thumbs = t; self.update()
     def set_position(self, ms): self.position = ms; self.update()
+    def set_active(self, idx): self.active = idx; self.update()
 
     def mousePressEvent(self, e):
         if self.duration > 0:
@@ -300,13 +312,18 @@ class TimelineContent(QWidget):
                 amp = float(self.peaks[i0:i1 + 1].max()) * (wf_h * 0.5)
                 p.drawLine(x, int(mid - amp), x, int(mid + amp))
         if self.duration > 0:
-            p.setPen(Qt.NoPen)
-            p.setBrush(QColor(255, 200, 60, 130))
-            for c in self.cues:
+            for i, c in enumerate(self.cues):
                 cx0, cx1 = self.ms_to_x(c["start"]), self.ms_to_x(c["end"])
                 if cx1 < x0 or cx0 > x1:
                     continue
-                p.drawRect(QRectF(cx0, self.H - 16, max(1.0, cx1 - cx0), 13))
+                rect = QRectF(cx0, self.H - 16, max(1.0, cx1 - cx0), 13)
+                if i == self.active:                       # active/selected: bright + outline
+                    p.setBrush(QColor(255, 165, 0, 235))
+                    p.setPen(QPen(QColor(255, 255, 255, 210), 1))
+                else:
+                    p.setBrush(QColor(255, 200, 60, 130))
+                    p.setPen(Qt.NoPen)
+                p.drawRect(rect)
             px = int(self.ms_to_x(self.position))
             p.setPen(QPen(QColor(255, 70, 70), 2))
             p.drawLine(px, 0, px, self.H)
@@ -345,6 +362,7 @@ class TimelinePanel(QWidget):
     def set_peaks(self, p): self.content.set_peaks(p)
     def set_cues(self, c): self.content.set_cues(c)
     def set_thumbs(self, t): self.content.set_thumbs(t)
+    def set_active(self, idx): self.content.set_active(idx)
 
     def set_duration(self, d):
         self.content.duration = d
@@ -904,6 +922,7 @@ class Studio(QMainWindow):
     def _fill_table(self):
         self._sync = True
         self._hl_row = -1
+        self.timeline.set_active(-1)
         self.table.setRowCount(len(self.cues))
         self.table.setVerticalHeaderLabels([str(i + 1) for i in range(len(self.cues))])
         for r, c in enumerate(self.cues):
@@ -914,7 +933,7 @@ class Studio(QMainWindow):
         self.table.setItem(r, 0, QTableWidgetItem(ms_to_ts(c["start"])))
         self.table.setItem(r, 1, QTableWidgetItem(ms_to_ts(c["end"])))
         self.table.setItem(r, 2, QTableWidgetItem(f"{(c['end'] - c['start']) / 1000:.2f}"))
-        self.table.setItem(r, 3, QTableWidgetItem(c["text"].replace("\n", " ")))
+        self.table.setItem(r, 3, QTableWidgetItem(row_text(c["text"])))
 
     def _cur_row(self):
         idx = self.table.currentRow()
@@ -946,7 +965,7 @@ class Studio(QMainWindow):
         text = "\n".join(l for l in lines if l)
         self.cues[r]["text"] = text
         self._sync = True
-        self.table.item(r, 3).setText(text.replace("\n", " "))
+        self.table.item(r, 3).setText(row_text(text))
         self._sync = False
         self.view.set_caption(render_caption(text, self.max_chars))
         self._set_dirty(True)
@@ -1066,6 +1085,7 @@ class Studio(QMainWindow):
         self._set_row_bg(self._hl_row, None)
         self._set_row_bg(idx, QColor(46, 96, 62))
         self._hl_row = idx
+        self.timeline.set_active(idx)
         if idx >= 0 and self.table.item(idx, 0):
             self.table.scrollToItem(self.table.item(idx, 0), QAbstractItemView.EnsureVisible)
 
