@@ -12,6 +12,8 @@ __pycache__/
 build/
 dist/
 *.spec
+# ...but keep the hand-written PyInstaller spec
+!caption_studio.spec
 
 # OS / editor cruft
 .DS_Store

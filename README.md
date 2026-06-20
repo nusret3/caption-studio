@@ -69,6 +69,20 @@ python caption_studio.py [video]
 
 The optional `[video]` argument opens that file on launch. Recently opened videos are available under **File → Open Recent**.
 
+## Build a standalone executable (optional)
+
+To produce a self-contained build that runs without a Python install, use [PyInstaller](https://pyinstaller.org/) (a build-time tool, not a runtime dependency):
+
+```bash
+# Windows (cmd / PowerShell)
+build.bat        # or  .\build.ps1
+
+# macOS / Linux
+./build.sh
+```
+
+This reads `caption_studio.spec` and writes a folder to **`dist/CaptionStudio/`** containing the executable plus the bundled Qt and ffmpeg files — zip that folder to share it. Build on each OS you want to target (PyInstaller is not a cross-compiler). Run `setup` first so the venv exists.
+
 ## Usage
 
 1. **Open a video** (File → Open, or pass it on the command line). Caption Studio auto-loads a sibling `.srt` next to it — or start a blank one with **File → New SRT**.
