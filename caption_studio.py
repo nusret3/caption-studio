@@ -39,6 +39,10 @@ try:
 except Exception:
     FFMPEG = "ffmpeg"
 
+# On Windows, a windowed (no-console) build still pops a console window for every
+# ffmpeg subprocess. CREATE_NO_WINDOW suppresses that flash; it's a no-op elsewhere.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0
+
 
 def make_sign_icon(color, plus, size=16):
     """Render a crisp +/− glyph in the theme's button color (no icon-font dep)."""
@@ -158,7 +162,8 @@ def probe_display_size(path):
     Phone videos are often stored landscape with a 90/270 rotation flag."""
     try:
         out = subprocess.run([FFMPEG, "-hide_banner", "-i", path],
-                             capture_output=True, text=True, errors="ignore").stderr
+                             capture_output=True, text=True, errors="ignore",
+                             creationflags=_NO_WINDOW).stderr
     except Exception:
         return None
     vid = next((l for l in out.splitlines() if "Video:" in l), None)
@@ -192,7 +197,7 @@ class WaveformLoader(QThread):
     def run(self):
         try:
             cmd = [FFMPEG, "-v", "error", "-i", self.path, "-ac", "1", "-ar", "8000", "-f", "s16le", "-"]
-            data = subprocess.run(cmd, capture_output=True).stdout
+            data = subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW).stdout
             samples = np.frombuffer(data, np.int16).astype(np.float32) / 32768.0
             if samples.size == 0:
                 self.ready.emit(np.zeros(0)); return
@@ -221,7 +226,8 @@ class ThumbLoader(QThread):
     def run(self):
         try:
             info = subprocess.run([FFMPEG, "-hide_banner", "-i", self.path],
-                                  capture_output=True, text=True, errors="ignore").stderr
+                                  capture_output=True, text=True, errors="ignore",
+                                  creationflags=_NO_WINDOW).stderr
             dm = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", info)
             dur = (int(dm.group(1)) * 3600 + int(dm.group(2)) * 60 + float(dm.group(3))) if dm else 0.0
             interval = max(0.5, dur / 250) if dur > 0 else 1.0
@@ -230,7 +236,7 @@ class ThumbLoader(QThread):
             W += W % 2
             cmd = [FFMPEG, "-v", "error", "-i", self.path, "-vf",
                    f"fps=1/{interval},scale={W}:{H}", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"]
-            data = subprocess.run(cmd, capture_output=True).stdout
+            data = subprocess.run(cmd, capture_output=True, creationflags=_NO_WINDOW).stdout
             frame = W * H * 3
             thumbs = []
             for i in range(len(data) // frame):
@@ -597,6 +603,9 @@ class Studio(QMainWindow):
         self._hl_row = -1
         self._dirty = False        # unsaved caption edits?
         self._title_name = None    # current .srt name shown in the title
+        self._undo = []            # stacks of (cues, selected-row) snapshots
+        self._redo = []
+        self._edit_row = -1        # row whose text edits are being coalesced
 
         # ---- persisted settings ----
         self.settings = QSettings("CaptionStudio", "CaptionStudio")
@@ -645,6 +654,15 @@ class Studio(QMainWindow):
         m_file.addAction(_act(self, "&Save SRT…", self.save_srt, "Ctrl+S"))
         m_file.addSeparator()
         m_file.addAction(_act(self, "&Quit", self.close, "Ctrl+Q"))
+
+        m_edit = mb.addMenu("&Edit")
+        self.act_undo = _act(self, "&Undo", self.undo, "Ctrl+Z")
+        self.act_redo = QAction("&Redo", self)
+        self.act_redo.setShortcuts(["Ctrl+Y", "Ctrl+Shift+Z"])
+        self.act_redo.triggered.connect(self.redo)
+        m_edit.addAction(self.act_undo)
+        m_edit.addAction(self.act_redo)
+        self._update_undo_actions()
 
         m_cap = mb.addMenu("&Caption")
         self.act_add = _act(self, "&Add caption", self.add_cue, "Ins")
@@ -836,6 +854,7 @@ class Studio(QMainWindow):
         self.srt_path = None
         self._title_name = "untitled.srt"
         self._dirty = False
+        self._reset_undo()
         self._update_title()
         self._fill_table()
         self._clear_editor()
@@ -885,6 +904,7 @@ class Studio(QMainWindow):
         self.srt_path = str(path)
         self._title_name = path.name
         self._dirty = False
+        self._reset_undo()
         self._update_title()
         self._fill_table()
         self.timeline.set_cues(self.cues)
@@ -939,6 +959,7 @@ class Studio(QMainWindow):
     def _on_select(self):
         if self._sync:
             return
+        self._edit_row = -1                  # selecting a row ends any edit session
         r = self._cur_row()
         if r < 0:
             return
@@ -957,6 +978,9 @@ class Studio(QMainWindow):
         r = self._cur_row()
         if r < 0:
             return
+        if self._edit_row != r:              # first edit of a new session on this row
+            self._snapshot_undo()
+            self._edit_row = r
         # preserve manual line breaks; normalize spaces within each line
         lines = [" ".join(l.split()) for l in self.ed_text.toPlainText().split("\n")]
         text = "\n".join(l for l in lines if l)
@@ -979,6 +1003,9 @@ class Studio(QMainWindow):
             return
         if end < start:
             end = start
+        if start == self.cues[r]["start"] and end == self.cues[r]["end"]:
+            return                           # no change -> no undo step
+        self._push_undo()
         self.cues[r]["start"], self.cues[r]["end"] = start, end
         self._sync = True
         self._set_row(r, self.cues[r])
@@ -994,6 +1021,7 @@ class Studio(QMainWindow):
             end = min(end, dur)
             if end - start < 200:            # at the very end: back the cue up a bit
                 start, end = max(0, dur - 2000), dur
+        self._push_undo()
         cue = {"start": start, "end": max(end, start + 200), "text": ""}
         self.cues.append(cue)
         self.cues.sort(key=lambda c: c["start"])
@@ -1008,6 +1036,15 @@ class Studio(QMainWindow):
         r = self._cur_row()
         if r < 0:
             return
+        preview = (self.cues[r]["text"].replace("\n", " ").strip() or "(empty caption)")
+        if len(preview) > 60:
+            preview = preview[:57] + "…"
+        if QMessageBox.question(
+                self, "Delete caption",
+                f"Delete caption #{r + 1}?\n\n{preview}",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) != QMessageBox.Yes:
+            return
+        self._push_undo()
         del self.cues[r]
         self._fill_table()
         self.timeline.set_cues(self.cues)
@@ -1028,6 +1065,59 @@ class Studio(QMainWindow):
         self.ed_text.clear()
         self._sync = False
         self.view.set_caption("")
+
+    # ---------- undo / redo ----------
+    def _snapshot(self):
+        cues = [{"start": c["start"], "end": c["end"], "text": c["text"]} for c in self.cues]
+        return (cues, self._cur_row())
+
+    def _snapshot_undo(self):
+        """Record the current state as an undo step (and invalidate redo)."""
+        self._undo.append(self._snapshot())
+        del self._undo[:-100]              # cap history depth
+        self._redo.clear()
+        self._update_undo_actions()
+
+    def _push_undo(self):
+        """Record an undo step for a discrete action (add/delete/timing)."""
+        self._snapshot_undo()
+        self._edit_row = -1
+
+    def _reset_undo(self):
+        self._undo.clear()
+        self._redo.clear()
+        self._edit_row = -1
+        self._update_undo_actions()
+
+    def _restore(self, snap):
+        cues, row = snap
+        self.cues = [dict(c) for c in cues]
+        self._fill_table()
+        self.timeline.set_cues(self.cues)
+        self._edit_row = -1
+        if self.cues:
+            self._select_row(min(max(0, row), len(self.cues) - 1))
+        else:
+            self._clear_editor()
+        self._set_dirty(True)
+
+    def undo(self):
+        if not self._undo:
+            return
+        self._redo.append(self._snapshot())
+        self._restore(self._undo.pop())
+        self._update_undo_actions()
+
+    def redo(self):
+        if not self._redo:
+            return
+        self._undo.append(self._snapshot())
+        self._restore(self._redo.pop())
+        self._update_undo_actions()
+
+    def _update_undo_actions(self):
+        self.act_undo.setEnabled(bool(self._undo))
+        self.act_redo.setEnabled(bool(self._redo))
 
     # ---------- playback ----------
     def _toggle_play(self):
